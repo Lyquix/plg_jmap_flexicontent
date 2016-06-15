@@ -27,7 +27,7 @@ class JMapFilePluginFLEXIcontent implements JMapFilePlugin {
 	 * @param JRegistry The object holding configuration parameters for the plugin and data source
 	 * @param JDatabase $db The database connector object
 	 * @param JMapModel $sitemapModel The sitemap model object reference, it's needed to manage limitStart, limitRows properties and affected_rows state
-	 *        	
+	 *			
 	 * @return array
 	 * This function must return an associative array as following:
 	 * $returndata['items'] -> It's the mandatory objects array of elements, it must contain at least title and routed link fields
@@ -78,41 +78,41 @@ class JMapFilePluginFLEXIcontent implements JMapFilePlugin {
 		if($catScope) {
 			// Exclude categories
 			$cats = $pluginParams->get('cats');
-			if(is_array($cats)) $catScopeQuery = "\n AND #__categories.id NOT IN ( " . implode(',', $cats) . " )";
+			if(is_array($cats)) $catScopeQuery = " AND #__categories.id NOT IN ( " . implode(',', $cats) . " )";
 		}
 		else {
 			// Include categories
 			$cats = $pluginParams->get('cats');
-			if(is_array($cats)) $catScopeQuery = "\n AND #__categories.id IN ( " . implode(',', $cats) . " )";
+			if(is_array($cats)) $catScopeQuery = " AND #__categories.id IN ( " . implode(',', $cats) . " )";
 		}
 
 		// ACL
-		$aclQueryItems = "\n AND #__content.access IN ( " . implode(',', $accessLevel) . " )";
-		$aclQueryCategories = "\n AND #__categories.access IN ( " . implode(',', $accessLevel) . " )";
+		$aclQueryItems = " AND #__content.access IN ( " . implode(',', $accessLevel) . " )";
+		$aclQueryCategories = " AND #__categories.access IN ( " . implode(',', $accessLevel) . " )";
 		
 		// Retrieve records
 		$itemsQuery = "SELECT" .
-					  "\n #__content.id," .
-					  "\n #__content.alias," .
-					  "\n #__content.title," .
-			 		  "\n #__content.catid," .
-					  "\n #__content.modified AS " . $db->quoteName('lastmod') . "," .
-					  "\n #__content.publish_up," .
-					  "\n #__content.metakey" .
-					  "\n FROM " . $db->quoteName('#__content') .
-					  "\n JOIN " . $db->quoteName('#__categories') . " ON #__content.catid = #__categories.id" .
-					  "\n WHERE" .
-					  "\n #__categories.published = 1" .
-					  "\n AND #__content.state = 1" .
+					  " #__content.id," .
+					  " #__content.alias," .
+					  " #__content.title," .
+			 		  " #__content.catid," .
+					  " #__content.modified AS " . $db->quoteName('lastmod') . "," .
+					  " #__content.publish_up," .
+					  " #__content.metakey" .
+					  " FROM " . $db->quoteName('#__content') .
+					  " JOIN " . $db->quoteName('#__categories') . " ON #__content.catid = #__categories.id" .
+					  " WHERE" .
+					  " #__categories.published = 1" .
+					  " AND #__content.state = 1" .
 					  $aclQueryItems .
 					  $aclQueryCategories .
 					  $catScopeQuery . 
-					  "\n AND (#__content.language = '*' OR #__content.language = '' OR #__content.language = " . $db->quote($langTag) . ")" .
-					  //"\n AND #__content.trash = 0" .
-					  "\n AND (#__content.publish_down > NOW() OR #__content.publish_down = '0000-00-00 00:00:00')" .
-					  "\n ORDER BY" .
-					  "\n #__categories.title ASC," .
-					  "\n #__content.title ASC";
+					  " AND (#__content.language = '*' OR #__content.language = '' OR #__content.language = " . $db->quote($langTag) . ")" .
+					  //" AND #__content.trash = 0" .
+					  " AND (#__content.publish_down > NOW() OR #__content.publish_down = '0000-00-00 00:00:00')" .
+					  " ORDER BY" .
+					  " #__categories.title ASC," .
+					  " #__content.title ASC";
 		
 		// Check if a limit for query rows has been set, this means we are in precaching process by JS App client
 		if(!$sitemapModel->limitRows) {
@@ -141,14 +141,66 @@ class JMapFilePluginFLEXIcontent implements JMapFilePlugin {
 			$itemsByCats = array();
 			foreach ($items as $item) {
 				$item->link = JRoute::_(FlexicontentHelperRoute::getItemRoute($item->id . ':' . $item->alias, $item->catid));
+				$itemsByCats[$item->catid][] = $item;
 			}
 			// Sort by URL
 			usort($items, function($a, $b) {
-			    return strcmp($a->link, $b->link);
+				return strcmp($a->link, $b->link);
 			});
 			$returndata['items'] = $items; // Assign items
+			$returndata['items_tree'] = $itemsByCats; // Assign items grouped by category
 		}
-		
+
+		// Get item categories
+		$catsQuery = "SELECT DISTINCT" . 
+				 " #__categories.id AS " . $db->quoteName('category_id') . "," .
+				 " #__categories.alias AS " . $db->quoteName('category_alias') . "," .
+				 " #__categories.title AS " . $db->quoteName('category_title') .
+				 " FROM #__categories" .
+				 " WHERE #__categories.published = 1" .
+				 " AND (#__categories.extension = 'com_content' OR #__categories.extension = 'system')" .
+				 $catScopeQuery .
+				 $aclQueryCategories .
+				 " ORDER BY #__categories.lft";
+		$db->setQuery($catsQuery);
+		$totalItemsCats = $db->loadObjectList();
+		if ($db->getErrorNum ()) {
+			throw new JMapException(JText::sprintf('COM_JMAP_ERROR_RETRIEVING_DATA_FROM_PLUGIN_DATASOURCE', $db->getErrorMsg()), 'warning');
+		}
+
+		// Get category tree
+		$catsTreeQuery = "SELECT" .
+						 " #__categories.parent_id AS " . $db->quoteName('parent') . "," .
+						 " #__categories.id AS " . $db->quoteName('child') .
+						 " FROM #__categories" .
+						 " WHERE #__categories.published = 1" .
+						 " AND (#__categories.extension = 'com_content' OR #__categories.extension = 'system')" .
+						 $catScopeQuery .
+						 $aclQueryCategories;
+		$totalItemsCatsTree = $db->setQuery($catsTreeQuery)->loadAssocList('child');
+		if ($db->getErrorNum ()) {
+			throw new JMapException(JText::sprintf('COM_JMAP_ERROR_RETRIEVING_DATA_FROM_PLUGIN_DATASOURCE', $db->getErrorMsg()), 'warning');
+		}
+
+		$catsTree = array();
+		if(is_array($totalItemsCats) && count($totalItemsCats)) {
+			foreach ($totalItemsCats as &$childCat) {
+				$childCat->category_link = JRoute::_(FlexicontentHelperRoute::getCategoryRoute($childCat->category_id));
+				$parentCat = $totalItemsCatsTree[$childCat->category_id]['parent'];
+				// Skip root category
+				if($parentCat != 0) {
+					// Set parent id 0 to level 1 categories
+					if($parentCat == 1) $parentCat = 0;
+					$catsTree[$parentCat][] = $childCat;
+				}
+			}
+		}
+
+		$returndata['categories_tree'] = $catsTree;
+
 		return $returndata;
+
+
+
 	}
 }
